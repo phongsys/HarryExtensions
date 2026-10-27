@@ -486,7 +486,8 @@ function PluginDefinition:init(api)
             progress_at = 0,
             next_swap_scan = 0,
             skip = setmetatable({}, { __mode = "k" }),
-            weapon = "melee",
+            weapon = nil,
+            slot_last_press = 0,
             cycle_state = "hide",
             cycle_at = 0,
             cycle_target = nil,
@@ -552,153 +553,33 @@ function PluginDefinition:init(api)
             end)
         end
 
-        local SLOT_MAX_TRIES = 5
+        local SLOT_CLICK_PAUSE = 0.15
+        local SLOT_PRESS_GAP = 0.25
 
-        local function held_tool()
-            local char = zt_lp.Character
-            if char == nil then
-                return nil
-            end
-            return char:FindFirstChildOfClass("Tool")
-        end
-
-        local slot_learned = { gun = nil, melee = nil }
-
-        local TOOL_GUN_WORDS = { "gun", "rifle", "pistol", "shotgun", "sniper", "revolver", "musket", "smg", "uzi", "blaster", "cannon", "ranged", "crossbow", "slingshot", "rocket", "launcher", "magnum", "ak47", "scar", "rpg", "ak" }
-        local TOOL_MELEE_WORDS = { "sword", "knife", "bat", "machete", "dagger", "axe", "club", "hammer", "blade", "melee", "katana", "spear", "baton", "crowbar", "cleaver", "sickle", "scythe", "shovel" }
-
-        local function tool_is_gun(tool)
-            local name = string.lower(string.gsub(tool.Name, "%W", ""))
-            if name == "" then
-                return nil
-            end
-            for _, word in TOOL_GUN_WORDS do
-                if string.find(name, word, 1, true) then
-                    return true
-                end
-            end
-            for _, word in TOOL_MELEE_WORDS do
-                if string.find(name, word, 1, true) then
-                    return false
-                end
-            end
-            return nil
-        end
-
-        local function learn_tool(weapon, tool)
-            if tool == nil then
+        local function press_slot(weapon)
+            local now = os.clock()
+            if now - (rt.slot_last_press or 0) < SLOT_PRESS_GAP then
                 return
             end
-            local kind = tool_is_gun(tool)
-            if kind == nil or kind == (weapon == "gun") then
-                slot_learned[weapon] = tool
-            end
-        end
-
-        local function find_slot_tool(wanted)
-            local learned = slot_learned[wanted]
-            if learned and learned.Parent and learned:IsA("Tool") then
-                return learned
-            end
-            local held = held_tool()
-            local matched = {}
-            local function scan(tool)
-                if tool == held then
-                    return
-                end
-                local kind = tool_is_gun(tool)
-                if (wanted == "gun" and kind ~= false) or (wanted == "melee" and kind ~= true) then
-                    table.insert(matched, tool)
-                end
-            end
-            local char = zt_lp.Character
-            if char then
-                for _, d in char:GetChildren() do
-                    if d:IsA("Tool") then
-                        scan(d)
-                    end
-                end
-            end
-            local backpack = zt_lp:FindFirstChildOfClass("Backpack")
-            if backpack then
-                for _, d in backpack:GetChildren() do
-                    if d:IsA("Tool") then
-                        scan(d)
-                    end
-                end
-            end
-            if #matched == 1 then
-                slot_learned[wanted] = matched[1]
-                return matched[1]
-            end
-            return nil
-        end
-
-        local SLOT_UNEQUIP_DELAY = 0.1
-
-        local function equip_direct(tool)
-            local char = zt_lp.Character
-            local hum = char and char:FindFirstChildOfClass("Humanoid")
-            if hum and tool then
-                pcall(function()
-                    hum:EquipTool(tool)
-                end)
-            end
-        end
-
-        local function press_slot(weapon, unequip_first)
-            local now = os.clock()
+            rt.slot_last_press = now
             rt.weapon = weapon
-            rt.switch_ref = held_tool()
-            local tool = find_slot_tool(weapon)
-            local recheck = 0.05
-            if tool ~= nil then
-                equip_direct(tool)
-            else
-                local wanted_key = weapon == "gun" and Enum.KeyCode.One or Enum.KeyCode.Two
-                if unequip_first and rt.switch_ref ~= nil then
-                    recheck = 0.35
-                    tap_key(weapon == "gun" and Enum.KeyCode.Two or Enum.KeyCode.One)
-                    task.delay(SLOT_UNEQUIP_DELAY, function()
-                        if rt.weapon == weapon then
-                            tap_key(wanted_key)
-                        end
-                    end)
-                else
-                    recheck = 0.1
-                    tap_key(wanted_key)
-                end
-            end
-            rt.click_pause_until = now + recheck + 0.1
-            rt.slot_check_at = now + recheck
+            rt.click_pause_until = now + SLOT_CLICK_PAUSE
+            tap_key(weapon == "gun" and Enum.KeyCode.One or Enum.KeyCode.Two)
         end
 
         local function equip_melee_slot()
-            rt.slot_tries = 0
-            press_slot("melee", held_tool() ~= nil)
+            rt.weapon = nil
+            press_slot("melee")
         end
 
         local function equip_gun_slot()
-            rt.slot_tries = 0
-            press_slot("gun", held_tool() ~= nil)
+            rt.weapon = nil
+            press_slot("gun")
         end
 
         local function apply_weapon(wanted)
-            local now = os.clock()
             if rt.weapon ~= wanted then
-                rt.slot_tries = 0
-                press_slot(wanted, held_tool() ~= nil)
-            elseif rt.slot_check_at and now >= rt.slot_check_at then
-                local tool = held_tool()
-                if tool ~= nil and tool ~= rt.switch_ref then
-                    learn_tool(wanted, tool)
-                    rt.slot_check_at = nil
-                elseif (rt.slot_tries or 0) < SLOT_MAX_TRIES then
-                    rt.slot_tries = (rt.slot_tries or 0) + 1
-                    press_slot(wanted, true)
-                else
-                    rt.slot_check_at = nil
-                end
+                press_slot(wanted)
             end
         end
 
@@ -870,7 +751,7 @@ function PluginDefinition:init(api)
             { label = "Skeleton", match = { "skeleton" },
                 prio = 10, radius = nil, height = 0, hide = "none", swap = 15 },
             { label = "Exploding Zombie", match = { "explo" },
-                prio = 5, radius = 30, height = 15, hide = "none", swap = 15 },
+                prio = 5, radius = 30, height = 15, hide = "none", swap = 15, gun = true },
             { label = "Charger Zombie", match = { "charger" },
                 prio = 5, radius = nil, height = 0, hide = "none", swap = 15,
                 cycle = { hide_x = 10, hide_y = 20, hide_time = 2, attack_x = 0, attack_y = 5, attack_time = 0.3 } },
@@ -1313,8 +1194,6 @@ function PluginDefinition:init(api)
                 rt.cycle_at = 0
                 rt.equip_after = nil
                 rt.weapon = nil
-                rt.switch_ref = nil
-                rt.slot_check_at = nil
                 m1_set(false)
                 rt.next_swap_scan = now + 0.1
             end
@@ -1510,7 +1389,7 @@ function PluginDefinition:init(api)
                 rt.mode = rt.mode == "hover" and "far" or "hover"
             end
 
-            apply_weapon(rt.mode == "far" and "gun" or "melee")
+            apply_weapon(plan.gun and "gun" or "melee")
 
             if rt.mode == "hover" then
                 local cf = safe_cframe_for(target_pos, math.max(HOVER_HEIGHT, plan.height))
@@ -1556,16 +1435,8 @@ function PluginDefinition:init(api)
 
         track(zt_lp.CharacterAdded:Connect(function(character)
             m1_set(false)
-            slot_learned.gun = nil
-            slot_learned.melee = nil
-            rt.slot_check_at = nil
-            rt.switch_ref = nil
+            rt.weapon = nil
             task.spawn(hook_health, character)
-            task.delay(1.5, function()
-                if zt.enabled then
-                    rt.weapon = nil
-                end
-            end)
         end))
 
         zt_cleanup = function()
