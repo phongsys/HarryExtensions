@@ -5,6 +5,7 @@ local UserInputService    = game:GetService("UserInputService")
 local StarterGui          = game:GetService("StarterGui")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local CollectionService   = game:GetService("CollectionService")
+local HttpService         = game:GetService("HttpService")
 local LocalPlayer         = Players.LocalPlayer
 
 local GENV = (getgenv and getgenv()) or _G
@@ -265,6 +266,74 @@ function PluginDefinition:init(api)
         return ok
     end
 
+    local LOADER_SETTINGS_FILE = "lilac/HarryExtensions.json"
+    local loader_settings = {
+        autoload = false,
+        silent_load = false,
+    }
+
+    local function load_loader_settings()
+        local ok, raw = pcall(function()
+            if type(isfile) ~= "function" or not isfile(LOADER_SETTINGS_FILE) then
+                return nil
+            end
+            return readfile(LOADER_SETTINGS_FILE)
+        end)
+        if not ok or type(raw) ~= "string" or raw == "" then
+            return false
+        end
+
+        local ok_json, data = pcall(function()
+            return HttpService:JSONDecode(raw)
+        end)
+        if not ok_json or type(data) ~= "table" then
+            return false
+        end
+
+        if type(data.autoload) == "boolean" then
+            loader_settings.autoload = data.autoload
+        end
+        if type(data.silent_load) == "boolean" then
+            loader_settings.silent_load = data.silent_load
+        end
+        return true
+    end
+
+    local function save_loader_settings()
+        local ok_json, encoded = pcall(function()
+            return HttpService:JSONEncode({
+                autoload = loader_settings.autoload,
+                silent_load = loader_settings.silent_load,
+            })
+        end)
+        if not ok_json or type(encoded) ~= "string" then
+            warn("[Harry Extensions] Could not encode " .. LOADER_SETTINGS_FILE)
+            return
+        end
+
+        local ok = pcall(function()
+            if type(isfolder) == "function" and not isfolder("lilac") then
+                makefolder("lilac")
+            end
+            writefile(LOADER_SETTINGS_FILE, encoded)
+        end)
+        if not ok then
+            warn("[Harry Extensions] Could not save " .. LOADER_SETTINGS_FILE)
+        end
+    end
+
+    if not load_loader_settings() then
+        local legacy_autoload = api.config:get("harry_autoload", nil)
+        local legacy_silent = api.config:get("harry_silent_load", nil)
+        if type(legacy_autoload) == "boolean" then
+            loader_settings.autoload = legacy_autoload
+        end
+        if type(legacy_silent) == "boolean" then
+            loader_settings.silent_load = legacy_silent
+        end
+        save_loader_settings()
+    end
+
     local loader_sec = api.ui:addsection({
         name = "Loader",
         side = "right",
@@ -272,25 +341,24 @@ function PluginDefinition:init(api)
 
     safe_control(loader_sec, "toggle", {
         name = "Autoload",
-        flag = "harry_autoload",
-        default = api.config:get("harry_autoload", false),
+        default = loader_settings.autoload,
         callback = function(v)
-            v = v and true or false
-            api.config:set("harry_autoload", v)
-            set_autoload(v)
+            loader_settings.autoload = v and true or false
+            save_loader_settings()
+            set_autoload(loader_settings.autoload)
         end,
     })
 
     safe_control(loader_sec, "toggle", {
         name = "Silent Load",
-        flag = "harry_silent_load",
-        default = api.config:get("harry_silent_load", false),
+        default = loader_settings.silent_load,
         callback = function(v)
-            api.config:set("harry_silent_load", v and true or false)
+            loader_settings.silent_load = v and true or false
+            save_loader_settings()
         end,
     })
 
-    if api.config:get("harry_autoload", false) then
+    if loader_settings.autoload then
         set_autoload(true)
     end
 
@@ -408,11 +476,17 @@ function PluginDefinition:init(api)
 
         local zt = {
             enabled = api.config:get("ztr_enabled", false),
+            autoswap = api.config:get("ztr_autoswap", true) and true or false,
+            autoswap_rule = tostring(api.config:get("ztr_autoswap_rule", "Priority + Closer")),
+            autoswap_interval = tonumber(api.config:get("ztr_autoswap_interval", 1)) or 1,
         }
+
+        local SWAP_MARGIN_STUDS = 6
         local rt = {
             lock_ent = nil,
             lock_hp = 0,
             progress_at = 0,
+            next_swap_scan = 0,
             skip = setmetatable({}, { __mode = "k" }),
             weapon = "melee",
             cycle_state = "hide",
@@ -988,6 +1062,7 @@ function PluginDefinition:init(api)
             if value then
                 rt.mode = nil
                 rt.weapon = nil
+                rt.next_swap_scan = 0
                 safe_notify(api, {
                     title = "Zombie Tower Ragebot",
                     content = "You might have to disable the rage in the boss level and kill the bosses yourself.",
@@ -1011,6 +1086,42 @@ function PluginDefinition:init(api)
                 if (value and true or false) ~= zt.enabled then
                     set_zt_enabled(value)
                 end
+            end,
+        })
+
+        safe_control(zt_sec, "toggle", {
+            name = "Auto Swap Targets",
+            flag = "ztr_autoswap",
+            default = zt.autoswap,
+            callback = function(value)
+                zt.autoswap = value and true or false
+                api.config:set("ztr_autoswap", zt.autoswap)
+                if zt.autoswap then
+                    rt.next_swap_scan = 0
+                end
+            end,
+        })
+
+        safe_control(zt_sec, "dropdown", {
+            name = "Swap Rule",
+            flag = "ztr_autoswap_rule",
+            options = { "Priority Only", "Priority + Closer" },
+            default = zt.autoswap_rule,
+            callback = function(value)
+                zt.autoswap_rule = tostring(value or "Priority + Closer")
+                api.config:set("ztr_autoswap_rule", zt.autoswap_rule)
+            end,
+        })
+
+        safe_control(zt_sec, "slider", {
+            name = "Swap Scan Interval",
+            flag = "ztr_autoswap_interval",
+            min = 0.25, max = 10,
+            default = zt.autoswap_interval,
+            suffix = "s",
+            callback = function(value)
+                zt.autoswap_interval = tonumber(value) or 1
+                api.config:set("ztr_autoswap_interval", zt.autoswap_interval)
             end,
         })
 
@@ -1041,7 +1152,7 @@ function PluginDefinition:init(api)
                 if ok_mouse and mouse then return mouse end
                 return nil
             elseif value_type == "table" and depth < 2 then
-                for _, field in ipairs({ "Key", "key", "Keybind", "keybind", "Value", "value", 1 }) do
+                for _, field in ipairs({ "Key", "key", "KeyCode", "Keybind", "keybind", "Value", "value", 1 }) do
                     local inner = value[field]
                     if inner ~= nil then
                         local parsed = parse_bind(inner, depth + 1)
@@ -1052,18 +1163,32 @@ function PluginDefinition:init(api)
             return nil
         end
 
-        local toggle_key = parse_bind(api.config:get("ztr_keybind", "P"))
+        local stored_bind = api.config:get("ztr_keybind", nil)
+        local toggle_key = nil
+        if stored_bind == nil then
+            toggle_key = Enum.KeyCode.P
+        else
+            toggle_key = parse_bind(stored_bind)
+        end
         local toggle_key_ignore_until = 0
 
         safe_control(zt_sec, "keybind", {
             name = "Zombie Tower Ragebot Key",
-            flag = "ztr_keybind",
-            default = toggle_key and toggle_key.Name or "None",
+            default = toggle_key or Enum.KeyCode.Unknown,
             callback = function(value)
-                if type(value) == "boolean" then return end
-                toggle_key = parse_bind(value)
+                if type(value) == "boolean" then
+                    return
+                end
+                local parsed = parse_bind(value)
+                if parsed then
+                    toggle_key = parsed
+                elseif type(value) == "string" then
+                    local lowered = string.lower(value)
+                    if lowered == "" or lowered == "none" or lowered == "unbound" then
+                        toggle_key = nil
+                    end
+                end
                 api.config:set("ztr_keybind", toggle_key and toggle_key.Name or "None")
-
                 toggle_key_ignore_until = os.clock() + 0.3
             end,
         })
@@ -1102,6 +1227,31 @@ function PluginDefinition:init(api)
             return ent:FindFirstChild("PinataHitbox") or ent:FindFirstChild("HitboxHead")
                 or ent:FindFirstChild("HitboxBody") or ent:FindFirstChild("HumanoidRootPart")
                 or ent:FindFirstChildWhichIsA("BasePart")
+        end
+
+        local function commit_target(ent, now)
+            local switched = ent ~= rt.lock_ent
+            rt.lock_ent = ent
+            rt.lock_hp = 0
+            if ent then
+                local hum = ent:FindFirstChildOfClass("Humanoid")
+                rt.lock_hp = hum and hum.Health or 0
+            end
+            rt.progress_at = now
+            rt.mode_at = now
+            if switched then
+                rt.mode = start_mode(ent)
+                rt.cycle_target = nil
+                rt.cycle_state = "hide"
+                rt.cycle_at = 0
+                rt.equip_after = nil
+                rt.weapon = nil
+                rt.tool_seen = nil
+                rt.slot_check_at = nil
+                m1_set(false)
+                rt.next_swap_scan = now + 0.1
+            end
+            return ent and ent_part(ent) or nil
         end
 
         local function step(dt)
@@ -1179,21 +1329,49 @@ function PluginDefinition:init(api)
                     end
                 end
             end
+            if zt.autoswap and target_part and now >= (rt.next_swap_scan or 0) then
+                rt.next_swap_scan = now
+                    + math.max(0.25, tonumber(zt.autoswap_interval) or 1)
+                local swap_ent, swap_part = pick_target(part.Position, rt.skip)
+                local do_swap = false
+
+                if swap_ent and swap_part and swap_ent ~= rt.lock_ent then
+                    if not (rt.lock_ent and rt.lock_ent.Parent) then
+                        do_swap = true
+                    else
+                        local locked_prio = plan_for(rt.lock_ent.Name).prio
+                        local swap_prio = plan_for(swap_ent.Name).prio
+                        if swap_prio > locked_prio then
+                            do_swap = true
+                        elseif zt.autoswap_rule == "Priority + Closer"
+                            and swap_prio == locked_prio then
+                            local locked_part = ent_part(rt.lock_ent)
+                            if locked_part then
+                                local swap_dist = (swap_part.Position - part.Position).Magnitude
+                                local locked_dist = (locked_part.Position - part.Position).Magnitude
+                                if swap_dist + SWAP_MARGIN_STUDS < locked_dist then
+                                    do_swap = true
+                                end
+                            else
+                                do_swap = true
+                            end
+                        end
+                    end
+                end
+
+                if do_swap then
+                    m1_set(false)
+                    commit_target(swap_ent, now)
+                    target_ent, target_part = swap_ent, swap_part
+                end
+            end
+
             if not target_part then
                 target_ent, target_part = pick_target(part.Position, rt.skip)
                 if not target_part then
                     target_ent, target_part = pick_target(part.Position)
                 end
-                if target_ent ~= rt.lock_ent then
-                    rt.lock_ent = target_ent
-                    local new_hum = target_ent and target_ent:FindFirstChildOfClass("Humanoid")
-                    rt.lock_hp = new_hum and new_hum.Health or 0
-                    rt.progress_at = now
-                    rt.mode = start_mode(target_ent)
-                    rt.mode_at = now
-                else
-                    rt.progress_at = now
-                end
+                target_part = commit_target(target_ent, now) or target_part
             end
             if not target_part then
                 m1_set(false)
@@ -2924,7 +3102,7 @@ function PluginDefinition:init(api)
 
     GENV.__harry_extensions_cleanup = full_cleanup
 
-    if not api.config:get("harry_silent_load", false) then
+    if not loader_settings.silent_load then
         safe_notify(api, {
             title = api.name,
             content = "Harry Extensions loaded successfully!",
