@@ -1049,10 +1049,11 @@ function PluginDefinition:init(api)
             if value then
                 rt.mode = nil
                 rt.weapon = nil
+                rt.melee_deadline = nil
                 rt.next_swap_scan = 0
                 safe_notify(api, {
                     title = "Zombie Tower Ragebot",
-                    content = "You might have to disable the rage in the boss level and kill the bosses yourself.",
+                    content = "You need to shoot at the Chicken Trojan pinata to continue.",
                     duration = 6,
                 })
             else
@@ -1336,7 +1337,7 @@ function PluginDefinition:init(api)
             local target_pos = target_part.Position
 
             if plan.cycle then
-                apply_weapon("melee")
+                apply_weapon((rt.melee_deadline ~= nil and now >= rt.melee_deadline) and "gun" or "melee")
                 local c = plan.cycle
                 if rt.cycle_target ~= target_ent then
                     rt.cycle_target = target_ent
