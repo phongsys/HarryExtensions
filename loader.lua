@@ -459,7 +459,7 @@ function PluginDefinition:init(api)
     do
         local zt_lp = Players.LocalPlayer
 
-        local HOVER_HEIGHT = 10
+        local HOVER_HEIGHT = 5
         local FAR_ORBIT_RADIUS = 25
         local FAR_ORBIT_HEIGHT = 15
         local SWAP_SECONDS = 15
@@ -788,7 +788,7 @@ function PluginDefinition:init(api)
             { label = "Hunter Zombie", match = { "hunter" },
                 prio = 5, radius = nil, height = 0, hide = "hover", swap = 10 },
             { label = "Brute Zombie", match = { "brute" },
-                prio = 15, radius = 35, height = 0, hide = "hover", swap = 10 },
+                prio = 15, radius = 35, height = 13, hide = "hover", swap = 10 },
             { label = "Tin Hat Zombie", match = { "tinhat" },
                 prio = 0, radius = nil, height = 0, hide = "hover", swap = SWAP_SECONDS },
             { label = "Chicken", match = { "chicken" },
