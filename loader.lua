@@ -243,7 +243,7 @@ function PluginDefinition:init(api)
 
     migrate_config()
 
-    local LOADER_URL = "https://raw.githubusercontent.com/phongsys/HarryExtensions/refs/heads/main/main.lua"
+    local LOADER_URL = "https://raw.githubusercontent.com/phongsys/HarryExtensions/refs/heads/main/loader.lua"
     local AUTOLOAD_DIR = "lilac/plugins"
     local AUTOLOAD_FILE = AUTOLOAD_DIR .. "/HarryExtensions.luau"
 
@@ -459,7 +459,7 @@ function PluginDefinition:init(api)
     do
         local zt_lp = Players.LocalPlayer
 
-        local HOVER_HEIGHT = 5
+        local HOVER_HEIGHT = 10
         local FAR_ORBIT_RADIUS = 25
         local FAR_ORBIT_HEIGHT = 15
         local SWAP_SECONDS = 15
@@ -476,11 +476,9 @@ function PluginDefinition:init(api)
 
         local zt = {
             enabled = api.config:get("ztr_enabled", false),
-            autoswap = api.config:get("ztr_autoswap", true) and true or false,
-            autoswap_rule = tostring(api.config:get("ztr_autoswap_rule", "Priority + Closer")),
-            autoswap_interval = tonumber(api.config:get("ztr_autoswap_interval", 1)) or 1,
         }
 
+        local SWAP_SCAN_SECONDS = 1
         local SWAP_MARGIN_STUDS = 6
         local rt = {
             lock_ent = nil,
@@ -558,41 +556,57 @@ function PluginDefinition:init(api)
         local SLOT_VERIFY_SECONDS = 0.4
         local SLOT_MAX_TRIES = 3
 
-        local function holding_tool()
+        local function held_tool()
             local char = zt_lp.Character
-            return char ~= nil and char:FindFirstChildOfClass("Tool") ~= nil
+            if char == nil then
+                return nil
+            end
+            return char:FindFirstChildOfClass("Tool")
         end
 
-        local function press_slot(weapon)
+        local SLOT_UNEQUIP_DELAY = 0.15
+
+        local function press_slot(weapon, unequip_first)
             local now = os.clock()
             rt.weapon = weapon
             rt.click_pause_until = now + SLOT_CLICK_PAUSE
             rt.slot_check_at = now + SLOT_VERIFY_SECONDS
-            tap_key(weapon == "gun" and Enum.KeyCode.One or Enum.KeyCode.Two)
+            rt.switch_ref = held_tool()
+            local wanted_key = weapon == "gun" and Enum.KeyCode.One or Enum.KeyCode.Two
+            if unequip_first and rt.switch_ref ~= nil then
+                tap_key(weapon == "gun" and Enum.KeyCode.Two or Enum.KeyCode.One)
+                task.delay(SLOT_UNEQUIP_DELAY, function()
+                    if rt.weapon == weapon then
+                        tap_key(wanted_key)
+                    end
+                end)
+            else
+                tap_key(wanted_key)
+            end
         end
 
         local function equip_melee_slot()
             rt.slot_tries = 0
-            press_slot("melee")
+            press_slot("melee", held_tool() ~= nil)
         end
 
         local function equip_gun_slot()
             rt.slot_tries = 0
-            press_slot("gun")
+            press_slot("gun", held_tool() ~= nil)
         end
 
         local function apply_weapon(wanted)
             local now = os.clock()
             if rt.weapon ~= wanted then
                 rt.slot_tries = 0
-                press_slot(wanted)
+                press_slot(wanted, held_tool() ~= nil)
             elseif rt.slot_check_at and now >= rt.slot_check_at then
-                if holding_tool() then
-                    rt.tool_seen = true
+                local tool = held_tool()
+                if tool ~= nil and tool ~= rt.switch_ref then
                     rt.slot_check_at = nil
-                elseif rt.tool_seen and (rt.slot_tries or 0) < SLOT_MAX_TRIES then
+                elseif (rt.slot_tries or 0) < SLOT_MAX_TRIES then
                     rt.slot_tries = (rt.slot_tries or 0) + 1
-                    press_slot(wanted)
+                    press_slot(wanted, true)
                 else
                     rt.slot_check_at = nil
                 end
@@ -778,7 +792,7 @@ function PluginDefinition:init(api)
             { label = "Tin Hat Zombie", match = { "tinhat" },
                 prio = 0, radius = nil, height = 0, hide = "hover", swap = SWAP_SECONDS },
             { label = "Chicken", match = { "chicken" },
-                prio = 0, radius = nil, height = 0, hide = "none", swap = SWAP_SECONDS,
+                prio = 50, radius = nil, height = 0, hide = "none", swap = SWAP_SECONDS,
                 stand = { x = 35, y = 0, gun = true } },
         }
         local DEFAULT_PLAN = {
@@ -1089,42 +1103,6 @@ function PluginDefinition:init(api)
             end,
         })
 
-        safe_control(zt_sec, "toggle", {
-            name = "Auto Swap Targets",
-            flag = "ztr_autoswap",
-            default = zt.autoswap,
-            callback = function(value)
-                zt.autoswap = value and true or false
-                api.config:set("ztr_autoswap", zt.autoswap)
-                if zt.autoswap then
-                    rt.next_swap_scan = 0
-                end
-            end,
-        })
-
-        safe_control(zt_sec, "dropdown", {
-            name = "Swap Rule",
-            flag = "ztr_autoswap_rule",
-            options = { "Priority Only", "Priority + Closer" },
-            default = zt.autoswap_rule,
-            callback = function(value)
-                zt.autoswap_rule = tostring(value or "Priority + Closer")
-                api.config:set("ztr_autoswap_rule", zt.autoswap_rule)
-            end,
-        })
-
-        safe_control(zt_sec, "slider", {
-            name = "Swap Scan Interval",
-            flag = "ztr_autoswap_interval",
-            min = 0.25, max = 10,
-            default = zt.autoswap_interval,
-            suffix = "s",
-            callback = function(value)
-                zt.autoswap_interval = tonumber(value) or 1
-                api.config:set("ztr_autoswap_interval", zt.autoswap_interval)
-            end,
-        })
-
         local function parse_bind(value, depth)
             depth = depth or 0
             local value_type = typeof(value)
@@ -1246,7 +1224,7 @@ function PluginDefinition:init(api)
                 rt.cycle_at = 0
                 rt.equip_after = nil
                 rt.weapon = nil
-                rt.tool_seen = nil
+                rt.switch_ref = nil
                 rt.slot_check_at = nil
                 m1_set(false)
                 rt.next_swap_scan = now + 0.1
@@ -1329,9 +1307,8 @@ function PluginDefinition:init(api)
                     end
                 end
             end
-            if zt.autoswap and target_part and now >= (rt.next_swap_scan or 0) then
-                rt.next_swap_scan = now
-                    + math.max(0.25, tonumber(zt.autoswap_interval) or 1)
+            if target_part and now >= (rt.next_swap_scan or 0) then
+                rt.next_swap_scan = now + SWAP_SCAN_SECONDS
                 local swap_ent, swap_part = pick_target(part.Position, rt.skip)
                 local do_swap = false
 
@@ -1343,8 +1320,7 @@ function PluginDefinition:init(api)
                         local swap_prio = plan_for(swap_ent.Name).prio
                         if swap_prio > locked_prio then
                             do_swap = true
-                        elseif zt.autoswap_rule == "Priority + Closer"
-                            and swap_prio == locked_prio then
+                        elseif swap_prio == locked_prio then
                             local locked_part = ent_part(rt.lock_ent)
                             if locked_part then
                                 local swap_dist = (swap_part.Position - part.Position).Magnitude
