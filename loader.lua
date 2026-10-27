@@ -478,7 +478,7 @@ function PluginDefinition:init(api)
             enabled = api.config:get("ztr_enabled", false),
         }
 
-        local SWAP_SCAN_SECONDS = 1
+        local SWAP_SCAN_SECONDS = 0.5
         local SWAP_MARGIN_STUDS = 6
         local rt = {
             lock_ent = nil,
@@ -552,8 +552,6 @@ function PluginDefinition:init(api)
             end)
         end
 
-        local SLOT_CLICK_PAUSE = 0.15
-        local SLOT_VERIFY_SECONDS = 0.4
         local SLOT_MAX_TRIES = 5
 
         local function held_tool()
@@ -636,7 +634,7 @@ function PluginDefinition:init(api)
             return nil
         end
 
-        local SLOT_UNEQUIP_DELAY = 0.15
+        local SLOT_UNEQUIP_DELAY = 0.1
 
         local function equip_direct(tool)
             local char = zt_lp.Character
@@ -651,25 +649,28 @@ function PluginDefinition:init(api)
         local function press_slot(weapon, unequip_first)
             local now = os.clock()
             rt.weapon = weapon
-            rt.click_pause_until = now + SLOT_VERIFY_SECONDS + 0.25
-            rt.slot_check_at = now + SLOT_VERIFY_SECONDS
             rt.switch_ref = held_tool()
             local tool = find_slot_tool(weapon)
+            local recheck = 0.05
             if tool ~= nil then
                 equip_direct(tool)
-                return
-            end
-            local wanted_key = weapon == "gun" and Enum.KeyCode.One or Enum.KeyCode.Two
-            if unequip_first and rt.switch_ref ~= nil then
-                tap_key(weapon == "gun" and Enum.KeyCode.Two or Enum.KeyCode.One)
-                task.delay(SLOT_UNEQUIP_DELAY, function()
-                    if rt.weapon == weapon then
-                        tap_key(wanted_key)
-                    end
-                end)
             else
-                tap_key(wanted_key)
+                local wanted_key = weapon == "gun" and Enum.KeyCode.One or Enum.KeyCode.Two
+                if unequip_first and rt.switch_ref ~= nil then
+                    recheck = 0.35
+                    tap_key(weapon == "gun" and Enum.KeyCode.Two or Enum.KeyCode.One)
+                    task.delay(SLOT_UNEQUIP_DELAY, function()
+                        if rt.weapon == weapon then
+                            tap_key(wanted_key)
+                        end
+                    end)
+                else
+                    recheck = 0.1
+                    tap_key(wanted_key)
+                end
             end
+            rt.click_pause_until = now + recheck + 0.1
+            rt.slot_check_at = now + recheck
         end
 
         local function equip_melee_slot()
