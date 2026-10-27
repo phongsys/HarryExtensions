@@ -788,7 +788,7 @@ function PluginDefinition:init(api)
             { label = "Hunter Zombie", match = { "hunter" },
                 prio = 5, radius = nil, height = 0, hide = "hover", swap = 10 },
             { label = "Brute Zombie", match = { "brute" },
-                prio = 15, radius = 35, height = 13, hide = "hover", swap = 10 },
+                prio = 15, radius = 35, height = 10, hide = "hover", swap = 10 },
             { label = "Tin Hat Zombie", match = { "tinhat" },
                 prio = 0, radius = nil, height = 0, hide = "hover", swap = SWAP_SECONDS },
             { label = "Chicken", match = { "chicken" },
