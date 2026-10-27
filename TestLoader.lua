@@ -23,10 +23,21 @@
       - passing `init` to lilac:plugin in the standalone path
 
     ============================================================================
+    Loader  (right side)
+    ============================================================================
+      Autoload    writes lilac/plugins/HarryExtensions.luau into the executor
+                  workspace (one line: loadstring of the raw GitHub script) so
+                  Lilac runs the plugin on every boot. Turning it off deletes
+                  the file.
+      Silent Load hides the "Harry Extensions loaded successfully!" toast.
+
+    ============================================================================
     Zombie Tower Ragebot  (left side, top)
     ============================================================================
       Only settings: the enable toggle and its keybind. Everything else is
       fixed (see "Orbit Until Kill" and "Enemy Plans" below).
+      Turning the ragebot off teleports you to the nearest checkpoint (a
+      SpawnLocation, or any part / model named or tagged "checkpoint").
       Every mob starts in hover (your Y = mob Y + 5, directly over it, no
       orbit; plans with a bigger height such as acid floors or bosses use that
       height instead). The near orbit no longer exists.
@@ -100,6 +111,19 @@
     ============================================================================
     CHANGELOG  (newest first; every change gets an entry here)
     ============================================================================
+    v2.17
+      - Added a "Loader" section with two toggles:
+          * Autoload: writes lilac/plugins/HarryExtensions.luau into the
+            executor workspace (a one-line loadstring of the raw GitHub
+            script, which Lilac runs after boot) and deletes it again when
+            turned off. The file is re-written on load while the toggle is on.
+          * Silent Load: the load notification is not shown.
+      - The load notification now reads "Harry Extensions loaded successfully!".
+      - Turning the Zombie Tower Ragebot off (toggle or keybind) teleports you
+        to the nearest checkpoint instead of back to your last ragebot spot.
+        Checkpoints are SpawnLocations plus any part or model whose name or
+        CollectionService tag contains "checkpoint". If none is found a
+        notification says so and the old behaviour (last position) is used.
     v2.16.1
       - Slot swapping reworked to behave like Auto Respawn: the key press is
         the same virtual key down / key up (0.05 s) inside a pcall. Because a
@@ -533,7 +557,7 @@ end
 local PluginDefinition = {
     name = "Harry Extensions",
     author = "harryfemboy",
-    version = "2.16.1",
+    version = "2.17",
 }
 
 function PluginDefinition:init(api)
@@ -586,6 +610,64 @@ function PluginDefinition:init(api)
     end
 
     migrate_config()
+
+    ----------------------------------------------------------------------
+    -- Loader: autoload file + silent load
+    ----------------------------------------------------------------------
+    local LOADER_URL = "https://raw.githubusercontent.com/phongsys/HarryExtensions/refs/heads/main/TestLoader.lua"
+    local AUTOLOAD_DIR = "lilac/plugins"
+    local AUTOLOAD_FILE = AUTOLOAD_DIR .. "/HarryExtensions.luau"
+
+    -- Autoload = a one-line loader script in the executor workspace at
+    -- lilac/plugins/HarryExtensions.luau (Lilac runs everything in that folder
+    -- after boot). Turning it off deletes the file.
+    local function set_autoload(enabled)
+        local ok, err = pcall(function()
+            if enabled then
+                for _, dir in ipairs({ "lilac", AUTOLOAD_DIR }) do
+                    if type(isfolder) ~= "function" or not isfolder(dir) then
+                        makefolder(dir)
+                    end
+                end
+                writefile(AUTOLOAD_FILE, 'loadstring(game:HttpGet("' .. LOADER_URL .. '"))()\n')
+            elseif type(isfile) == "function" and isfile(AUTOLOAD_FILE) then
+                delfile(AUTOLOAD_FILE)
+            end
+        end)
+        if not ok then
+            warn("[Harry Extensions] Autoload file error: " .. tostring(err))
+        end
+        return ok
+    end
+
+    local loader_sec = api.ui:addsection({
+        name = "Loader",
+        side = "right",
+    })
+
+    safe_control(loader_sec, "toggle", {
+        name = "Autoload",
+        flag = "harry_autoload",
+        default = api.config:get("harry_autoload", false),
+        callback = function(v)
+            v = v and true or false
+            api.config:set("harry_autoload", v)
+            set_autoload(v)
+        end,
+    })
+
+    safe_control(loader_sec, "toggle", {
+        name = "Silent Load",
+        flag = "harry_silent_load",
+        default = api.config:get("harry_silent_load", false),
+        callback = function(v)
+            api.config:set("harry_silent_load", v and true or false)
+        end,
+    })
+
+    if api.config:get("harry_autoload", false) then
+        set_autoload(true) -- make sure the file still exists
+    end
 
     local apply_gui_rendering
     local zt_cleanup
@@ -1210,13 +1292,79 @@ function PluginDefinition:init(api)
             RunService:BindToRenderStep("ZombieTowerCamera", Enum.RenderPriority.Camera.Value + 1, camera_lock)
         end)
 
-        local function stop_and_restore()
+        -- Nearest checkpoint to a position: SpawnLocations plus any part or
+        -- model whose name or CollectionService tag contains "checkpoint".
+        local function nearest_checkpoint(from)
+            local found, seen = {}, {}
+            local function add(inst)
+                local part = inst:IsA("BasePart") and inst
+                    or (inst:IsA("Model") and (inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart", true)))
+                if part and not seen[part] then
+                    seen[part] = true
+                    found[#found + 1] = part
+                end
+            end
+            pcall(function()
+                for _, tag in ipairs(CollectionService:GetAllTags()) do
+                    if tag:lower():find("checkpoint", 1, true) then
+                        for _, inst in ipairs(CollectionService:GetTagged(tag)) do
+                            add(inst)
+                        end
+                    end
+                end
+            end)
+            for _, d in ipairs(Workspace:GetDescendants()) do
+                if (d:IsA("SpawnLocation") or d.Name:lower():find("checkpoint", 1, true))
+                    and (d:IsA("BasePart") or d:IsA("Model")) then
+                    add(d)
+                end
+            end
+            local best, best_d = nil, math.huge
+            for _, part in ipairs(found) do
+                local d = (part.Position - from).Magnitude
+                if d < best_d then
+                    best, best_d = part, d
+                end
+            end
+            return best
+        end
+
+        -- to_checkpoint = true (ragebot switched off): teleport to the nearest
+        -- checkpoint. Otherwise (hot reload cleanup) go back to the last spot.
+        local function stop_and_restore(to_checkpoint)
             rt.cam_mode = nil
             rt.mode = nil
             rt.lock_ent = nil
             m1_set(false)
             local cf = rt.last_cf
             rt.last_cf = nil
+
+            if to_checkpoint then
+                local char = zt_lp.Character
+                local root = char and char:FindFirstChild("HumanoidRootPart")
+                local spot = root and nearest_checkpoint(root.Position)
+                if spot then
+                    local dest = spot.Position + Vector3.new(0, spot.Size.Y / 2 + 3, 0)
+                    local function go()
+                        local r = zt_lp.Character and zt_lp.Character:FindFirstChild("HumanoidRootPart")
+                        if r then
+                            pcall(function()
+                                r.CFrame = CFrame.new(dest)
+                                r.AssemblyLinearVelocity = Vector3.zero
+                            end)
+                        end
+                    end
+                    go()
+                    task.delay(0.1, go)
+                    return
+                end
+                safe_notify(api, {
+                    title = "Zombie Tower Ragebot",
+                    content = "No checkpoint found.",
+                    duration = 3,
+                })
+            end
+
             if not cf then return end
             local function restore()
                 local char = zt_lp.Character
@@ -1247,7 +1395,7 @@ function PluginDefinition:init(api)
                     duration = 6,
                 })
             else
-                stop_and_restore()
+                stop_and_restore(true)
                 safe_notify(api, {
                     title = "Zombie Tower Ragebot",
                     content = "Disabled.",
@@ -3211,11 +3359,13 @@ function PluginDefinition:init(api)
 
     GENV.__harry_extensions_cleanup = full_cleanup
 
-    safe_notify(api, {
-        title = api.name,
-        content = "FFA helper, zombie tower ragebot, crosshair & animations loaded. (v" .. tostring(api.version or PluginDefinition.version) .. ")",
-        duration = 3,
-    })
+    if not api.config:get("harry_silent_load", false) then
+        safe_notify(api, {
+            title = api.name,
+            content = "Harry Extensions loaded successfully!",
+            duration = 3,
+        })
+    end
 end
 
 local lilac = rawget(_G, "lilac") or (getgenv and getgenv().lilac)
