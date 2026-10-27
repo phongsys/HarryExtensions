@@ -479,6 +479,7 @@ function PluginDefinition:init(api)
         }
 
         local SWAP_SCAN_SECONDS = 0.5
+        local MELEE_GIVEUP_SECONDS = 5
         local SWAP_MARGIN_STUDS = 6
         local rt = {
             lock_ent = nil,
@@ -488,6 +489,7 @@ function PluginDefinition:init(api)
             skip = setmetatable({}, { __mode = "k" }),
             weapon = nil,
             slot_last_press = 0,
+            melee_deadline = nil,
             cycle_state = "hide",
             cycle_at = 0,
             cycle_target = nil,
@@ -747,7 +749,8 @@ function PluginDefinition:init(api)
             { label = "Ghost", match = { "ghost" },
                 prio = 50, radius = 10, height = 0, hide = "hover", swap = 15 },
             { label = "Reaper (Grim Reaper)", match = { "reaper", "grim" },
-                prio = 50, radius = 10, height = 0, hide = "none", swap = 15 },
+                prio = 60, radius = 10, height = 0, hide = "none", swap = 15,
+                stand = { x = 15, y = 3, gun = true } },
             { label = "Skeleton", match = { "skeleton" },
                 prio = 10, radius = nil, height = 0, hide = "none", swap = 15 },
             { label = "Exploding Zombie", match = { "explo" },
@@ -1194,6 +1197,7 @@ function PluginDefinition:init(api)
                 rt.cycle_at = 0
                 rt.equip_after = nil
                 rt.weapon = nil
+                rt.melee_deadline = now + MELEE_GIVEUP_SECONDS
                 m1_set(false)
                 rt.next_swap_scan = now + 0.1
             end
@@ -1389,7 +1393,9 @@ function PluginDefinition:init(api)
                 rt.mode = rt.mode == "hover" and "far" or "hover"
             end
 
-            apply_weapon(plan.gun and "gun" or "melee")
+            local want_gun = plan.gun
+                or (rt.melee_deadline ~= nil and now >= rt.melee_deadline)
+            apply_weapon(want_gun and "gun" or "melee")
 
             if rt.mode == "hover" then
                 local cf = safe_cframe_for(target_pos, math.max(HOVER_HEIGHT, plan.height))
